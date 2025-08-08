@@ -358,7 +358,7 @@ class MemoryTableManager {
 
             const memoryUpdatePrompt = window.promptBuilder.buildMemoryUpdatePrompt(
                 contact, 
-                window.userProfile, 
+                window.userProfile || { name: '用户', nickname: '用户', personality: '' }, 
                 currentContact, 
                 window.apiSettings,
                 recentMessages

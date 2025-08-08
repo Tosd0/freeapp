@@ -613,7 +613,7 @@ ${userReply}
 # 角色信息
 - 角色：${contact.name}
 - 人设：${contact.personality}
-- 用户：${userProfile.name}
+- 用户：${userProfile?.name || userProfile?.nickname || '用户'}
 - 当前时间：${currentTimeString}
 
 # 当前记忆表格

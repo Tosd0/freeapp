@@ -296,6 +296,9 @@ let userProfile = {
     avatar: '',
     personality: '' 
 };
+
+// 将 userProfile 绑定到全局作用域
+window.userProfile = userProfile;
 let moments = [];
 let weiboPosts = [];
 
