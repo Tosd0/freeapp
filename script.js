@@ -4131,8 +4131,8 @@ async function showAddMemoryModal() {
         console.warn('contacts数组不可用，无法填充角色选择器');
     }
     
-    // 显示/隐藏角色选择
-    handleMemoryTypeChange();
+    // 初始化时确保隐藏角色选择（因为默认是全局记忆）
+    characterSelectGroup.classList.add('hidden');
     
     showModal('addMemoryModal');
 }
