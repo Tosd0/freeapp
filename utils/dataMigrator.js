@@ -261,6 +261,9 @@ class IndexedDBManager {
                         if (sanitized.elevenLabsApiKey) {
                             delete sanitized.elevenLabsApiKey;
                         }
+                        if (sanitized.geminiKey) {
+                            delete sanitized.geminiKey;
+                        }
                         // 保留URL和其他设置
                         return sanitized;
                     });
