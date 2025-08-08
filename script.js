@@ -4102,8 +4102,8 @@ async function showAddMemoryModal() {
     const characterSelectGroup = document.getElementById('characterSelectGroup');
     const memoryCharacterSelect = document.getElementById('memoryCharacterSelect');
     
-    // 根据当前标签设置记忆类型
-    memoryType.value = memoryManager.currentMemoryType;
+    // 默认设置为全局记忆类型
+    memoryType.value = 'global';
     
     // 如果数据还没准备好，等待一下
     if (!window.contacts || !Array.isArray(window.contacts) || window.contacts.length === 0) {
@@ -4154,8 +4154,21 @@ async function handleAddMemory(event) {
     event.preventDefault();
     
     const memoryType = document.getElementById('memoryType').value;
-    const memoryContent = document.getElementById('memoryContent').value.trim();
+    let memoryContent = document.getElementById('memoryContent').value.trim();
     const memoryCharacterSelect = document.getElementById('memoryCharacterSelect').value;
+    
+    // 自动为每行添加 - 前缀
+    if (memoryContent) {
+        const lines = memoryContent.split('\n');
+        const formattedLines = lines.map(line => {
+            const trimmedLine = line.trim();
+            if (trimmedLine && !trimmedLine.startsWith('- ')) {
+                return '- ' + trimmedLine;
+            }
+            return trimmedLine;
+        }).filter(line => line.length > 0);
+        memoryContent = formattedLines.join('\n');
+    }
     
     if (!memoryContent) {
         showToast('请输入记忆内容');
