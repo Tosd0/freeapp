@@ -2641,7 +2641,8 @@ body {
     padding: 15px;
 }
 
-.memory-section.hidden {
+.memory-section.hidden,
+.hidden {
     display: none;
 }
 
