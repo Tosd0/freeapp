@@ -248,7 +248,25 @@ class IndexedDBManager {
             const request = store.getAll();
             
             request.onsuccess = () => {
-                resolve(request.result);
+                let result = request.result;
+                
+                // 为保护用户隐私，在导出时移除API密钥
+                if (storeName === 'apiSettings') {
+                    result = result.map(item => {
+                        const sanitized = { ...item };
+                        // 移除普通API密钥和ElevenLabs API密钥
+                        if (sanitized.key) {
+                            delete sanitized.key;
+                        }
+                        if (sanitized.elevenLabsApiKey) {
+                            delete sanitized.elevenLabsApiKey;
+                        }
+                        // 保留URL和其他设置
+                        return sanitized;
+                    });
+                }
+                
+                resolve(result);
             };
             
             request.onerror = () => {
@@ -740,7 +758,11 @@ window.refreshDatabaseStats = async function() {
                 'userProfile': '用户资料',
                 'moments': '朋友圈',
                 'weiboPosts': '论坛帖子',
-                'hashtagCache': '话题缓存'
+                'hashtagCache': '话题缓存',
+                'characterMemories': '角色记忆',
+                'globalMemory': '全局记忆',
+                'conversationCounters': '聊天计数器',
+                'memoryProcessedIndex': '总结缓存',
             };
             
             let totalRecords = 0;
