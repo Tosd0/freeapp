@@ -4117,8 +4117,12 @@ async function showAddMemoryModal() {
     // 确保contacts数组存在
     if (window.contacts && Array.isArray(window.contacts)) {
         let aiCount = 0;
+        console.log('开始在模态框中加载AI角色，contacts长度:', window.contacts.length);
+        
         window.contacts.forEach(contact => {
+            console.log(`检查联系人: ${contact.name}, 类型: ${contact.type}`);
             if (contact.type === 'private') {
+                console.log(`添加AI角色: ${contact.name}`);
                 const option = document.createElement('option');
                 option.value = contact.id;
                 option.textContent = contact.name;
@@ -4127,8 +4131,22 @@ async function showAddMemoryModal() {
             }
         });
         console.log(`模态框中已加载 ${aiCount} 个AI角色`);
+        
+        if (aiCount === 0) {
+            console.warn('没有找到任何AI角色，可能数据有问题');
+            const option = document.createElement('option');
+            option.value = '';
+            option.textContent = '暂无可用角色';
+            option.disabled = true;
+            memoryCharacterSelect.appendChild(option);
+        }
     } else {
         console.warn('contacts数组不可用，无法填充角色选择器');
+        const option = document.createElement('option');
+        option.value = '';
+        option.textContent = '数据加载中...';
+        option.disabled = true;
+        memoryCharacterSelect.appendChild(option);
     }
     
     // 初始化时确保隐藏角色选择（因为默认是全局记忆）
@@ -4176,8 +4194,20 @@ async function handleAddMemory(event) {
     }
     
     if (memoryType === 'character' && !memoryCharacterSelect) {
+        console.error('角色记忆但未选择角色:', { memoryType, memoryCharacterSelect });
         showToast('请选择角色');
         return;
+    }
+    
+    // 验证选择的角色是否存在（角色记忆模式）
+    if (memoryType === 'character') {
+        const selectedContact = window.contacts && window.contacts.find(c => c.id === memoryCharacterSelect);
+        if (!selectedContact) {
+            console.error('选择的角色不存在:', memoryCharacterSelect);
+            showToast('选择的角色不存在，请重新选择');
+            return;
+        }
+        console.log('准备为角色添加记忆:', selectedContact.name);
     }
     
     try {
@@ -4288,18 +4318,43 @@ function loadCharacterSelector() {
     });
     
     console.log(`已加载 ${aiContactCount} 个AI角色到选择器，总联系人数: ${totalContactCount}`);
+    
+    // 如果没有加载到任何角色，强制刷新一次
+    if (aiContactCount === 0 && totalContactCount > 0) {
+        console.log('没有找到AI角色，可能数据加载有问题，尝试重新检查contacts...');
+        setTimeout(() => {
+            loadCharacterSelector();
+        }, 1000);
+    }
 }
 
 // 加载角色记忆
 function loadCharacterMemories() {
     const characterSelector = document.getElementById('characterSelector');
     const memoryList = document.getElementById('characterMemoryList');
+    
+    if (!characterSelector) {
+        console.error('角色选择器未找到');
+        return;
+    }
+    
     const characterId = characterSelector.value;
+    console.log('选择的角色ID:', characterId);
     
     if (!characterId) {
         memoryList.innerHTML = '<div class="memory-empty">请先选择角色</div>';
         return;
     }
+    
+    // 验证选择的角色是否存在
+    const selectedContact = window.contacts && window.contacts.find(c => c.id === characterId);
+    if (!selectedContact) {
+        console.error('选择的角色不存在:', characterId);
+        memoryList.innerHTML = '<div class="memory-empty">选择的角色不存在，请重新选择</div>';
+        return;
+    }
+    
+    console.log('找到角色:', selectedContact.name);
     
     memoryManager.currentCharacter = characterId;
     const memories = memoryManager.getCharacterMemories(characterId);
@@ -4586,6 +4641,16 @@ async function deleteMemory(memoryId, isCharacter, characterId) {
 // 初始化记忆管理页面
 async function initMemoryManagementPage() {
     console.log('初始化记忆管理页面');
+    
+    // 确保数据已经加载
+    if (!window.contacts || !Array.isArray(window.contacts) || window.contacts.length === 0) {
+        console.log('数据未准备好，等待加载完成...');
+        const dataReady = await waitForDataReady();
+        if (!dataReady) {
+            console.warn('数据加载超时，但继续初始化页面');
+        }
+    }
+    
     try {
         // 从现有系统加载数据
         await loadExistingMemories();
@@ -4593,6 +4658,16 @@ async function initMemoryManagementPage() {
         // 默认加载全局记忆
         loadGlobalMemories();
         loadCharacterSelector();
+        
+        // 检查角色选择器是否成功加载
+        setTimeout(() => {
+            const characterSelector = document.getElementById('characterSelector');
+            if (characterSelector && characterSelector.options.length <= 1) {
+                console.log('角色选择器仍为空，尝试重新加载...');
+                loadCharacterSelector();
+            }
+        }, 500);
+        
     } catch (error) {
         console.error('初始化记忆管理页面失败:', error);
         // 即使加载失败也显示界面
@@ -4695,8 +4770,14 @@ document.addEventListener('DOMContentLoaded', function() {
     window.showPage = function(pageIdToShow) {
         originalShowPage(pageIdToShow);
         if (pageIdToShow === 'memoryManagementPage') {
+            console.log('切换到记忆管理页面，开始初始化...');
             // 等待数据准备完成后再初始化
-            waitForDataReady().then(() => {
+            waitForDataReady().then((dataReady) => {
+                if (dataReady) {
+                    console.log('数据准备就绪，初始化记忆管理页面');
+                } else {
+                    console.warn('数据准备超时，但仍尝试初始化页面');
+                }
                 initMemoryManagementPage();
             });
         }
