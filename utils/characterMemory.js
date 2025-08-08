@@ -883,11 +883,12 @@ class CharacterMemoryManager {
         const prompt = this.buildMemoryCheckPrompt(currentMemory, userTextContext, contact);
         
         try {
-            // 使用相同的API设置，但降低temperature
+            // 使用次要模型进行判断
+            const modelToUse = this.getSecondaryModel();
             const response = await window.apiService.callOpenAIAPI(
                 window.apiSettings.url,
                 window.apiSettings.key,
-                window.apiSettings.model,
+                modelToUse,
                 [{ role: 'user', content: prompt }],
                 { 
                     temperature: 0.1, // 降低随机性，让判断更稳定
@@ -1372,6 +1373,18 @@ ${forumContent}
             console.error('导入记忆数据失败:', error);
             return false;
         }
+    }
+
+    /**
+     * 获取次要模型
+     */
+    getSecondaryModel() {
+        const secondaryModel = window.apiSettings?.secondaryModel;
+        if (secondaryModel && secondaryModel !== 'sync_with_primary') {
+            return secondaryModel;
+        }
+        // 如果没有配置次要模型，使用主要模型
+        return window.apiSettings?.model || 'gpt-3.5-turbo';
     }
 }
 

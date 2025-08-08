@@ -332,6 +332,108 @@ class MemoryTableManager {
             totalMatches: matches.length
         };
     }
+
+    // 使用次要模型更新记忆表格
+    async updateMemoryTableWithSecondaryModel(contact) {
+        try {
+            // 获取当前联系人
+            const currentContact = this.getCurrentContact();
+            if (!currentContact || currentContact.id !== contact.id) {
+                console.warn('当前联系人不匹配，跳过记忆表格更新');
+                return false;
+            }
+
+            // 获取最近的对话历史
+            const recentMessages = this.getRecentMessages(currentContact, 10);
+            if (recentMessages.length === 0) {
+                console.log('没有对话历史，跳过记忆表格更新');
+                return false;
+            }
+
+            // 使用promptBuilder构建记忆表格更新提示词
+            if (!window.promptBuilder) {
+                console.error('promptBuilder未初始化');
+                return false;
+            }
+
+            const memoryUpdatePrompt = window.promptBuilder.buildMemoryUpdatePrompt(
+                contact, 
+                window.userProfile, 
+                currentContact, 
+                window.apiSettings,
+                recentMessages
+            );
+
+            // 获取模型配置
+            const modelToUse = this.getSecondaryModel();
+            
+            // 调用API更新记忆表格
+            const response = await window.apiService.callOpenAIAPI(
+                window.apiSettings.url,
+                window.apiSettings.key,
+                modelToUse,
+                [{ role: 'user', content: memoryUpdatePrompt }],
+                { 
+                    temperature: 0.3,
+                    max_tokens: 5000
+                },
+                (window.apiSettings.timeout || 60) * 1000
+            );
+
+            // 处理响应
+            if (!response || !response.choices || !response.choices[0] || !response.choices[0].message) {
+                console.warn('记忆表格更新API响应格式异常:', response);
+                return false;
+            }
+
+            const newMemoryTableContent = response.choices[0].message.content;
+            if (!newMemoryTableContent || newMemoryTableContent.trim() === '') {
+                console.warn('记忆表格更新API返回空内容');
+                return false;
+            }
+
+            // 更新联系人的记忆表格内容
+            const updateResult = this.updateContactMemoryTable(contact, newMemoryTableContent.trim());
+            if (updateResult) {
+                console.log('记忆表格更新成功');
+                // 保存数据
+                if (window.saveDataToDB) {
+                    await window.saveDataToDB();
+                }
+                return true;
+            }
+
+            return false;
+        } catch (error) {
+            console.error('使用次要模型更新记忆表格失败:', error);
+            return false;
+        }
+    }
+
+    // 获取次要模型
+    getSecondaryModel() {
+        const secondaryModel = window.apiSettings?.secondaryModel;
+        if (secondaryModel && secondaryModel !== 'sync_with_primary') {
+            return secondaryModel;
+        }
+        // 如果没有配置次要模型，使用主要模型
+        return window.apiSettings?.model || 'gpt-3.5-turbo';
+    }
+
+    // 获取最近的对话消息
+    getRecentMessages(contact, count = 10) {
+        if (!contact || !contact.messages) {
+            return [];
+        }
+        
+        return contact.messages
+            .slice(-count) // 取最近的消息
+            .map(msg => ({
+                role: msg.type === 'user' ? 'user' : 'assistant',
+                content: msg.content,
+                timestamp: msg.timestamp
+            }));
+    }
 }
 
 // 创建全局记忆表管理器实例
@@ -348,6 +450,10 @@ window.toggleMemoryEditMode = function() {
 
 window.renderMemoryTable = function(markdown) {
     return window.memoryTableManager.renderMemoryTable(markdown);
+};
+
+window.updateMemoryTableWithSecondaryModel = function(contact) {
+    return window.memoryTableManager.updateMemoryTableWithSecondaryModel(contact);
 };
 
 // 暴露默认模板

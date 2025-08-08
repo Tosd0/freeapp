@@ -2515,12 +2515,17 @@ async function sendMessage() {
             await sendGroupMessage();
         } else {
             showTypingIndicator();
-            const { replies, newMemoryTable } = await callAPI(currentContact);
+            const { replies } = await callAPI(currentContact);
             hideTypingIndicator();
-            if (newMemoryTable) {
-                currentContact.memoryTableContent = newMemoryTable;
-                await saveDataToDB();
-            }
+            
+            // 异步更新记忆表格（不阻塞后续流程）
+            setTimeout(async () => {
+                try {
+                    await window.memoryTableManager.updateMemoryTableWithSecondaryModel(currentContact);
+                } catch (error) {
+                    console.warn('记忆表格更新失败:', error);
+                }
+            }, 1000);
             if (!replies || replies.length === 0) { showTopNotification('AI没有返回有效回复'); return; }
             for (const response of replies) {
                 await new Promise(resolve => setTimeout(resolve, 300 + Math.random() * 800));
@@ -2611,12 +2616,17 @@ async function sendGroupMessage() {
         if (!member || member.type === 'group') continue;
         showTypingIndicator(member);
         try {
-            const { replies, newMemoryTable } = await callAPI(member, turnContext);
+            const { replies } = await callAPI(member, turnContext);
             hideTypingIndicator();
-            if (newMemoryTable) {
-                window.memoryTableManager.updateContactMemoryTable(currentContact, newMemoryTable);
-                await saveDataToDB();
-            }
+            
+            // 异步更新记忆表格（不阻塞后续流程）
+            setTimeout(async () => {
+                try {
+                    await window.memoryTableManager.updateMemoryTableWithSecondaryModel(member);
+                } catch (error) {
+                    console.warn('记忆表格更新失败:', error);
+                }
+            }, 1000);
             if (!replies || replies.length === 0) continue;
             for (const response of replies) {
                 await new Promise(resolve => setTimeout(resolve, 300 + Math.random() * 800));
@@ -2778,13 +2788,7 @@ async function callAPI(contact, turnContext = []) {
         }
         
         
-        const { memoryTable: newMemoryTable, cleanedResponse } = window.memoryTableManager.extractMemoryTableFromResponse(fullResponseText);
-        
-        if (!newMemoryTable) {
-            console.warn("AI回复中未找到<memory_table>。");
-        }
-        
-        let chatRepliesText = cleanedResponse;
+        let chatRepliesText = fullResponseText;
 
         // 处理回复分割
         if (!chatRepliesText.includes('|||')) {
@@ -2834,7 +2838,7 @@ async function callAPI(contact, turnContext = []) {
         }
         
         
-        return { replies: processedReplies, newMemoryTable };
+        return { replies: processedReplies };
 
     } catch (error) {
         console.error('callAPI错误详情:', {
@@ -3039,12 +3043,17 @@ async function sendEmoji(emoji) {
     if (!apiSettings.url || !apiSettings.key || !apiSettings.model) { showToast('请先设置API'); return; }
     showTypingIndicator();
     try {
-        const { replies, newMemoryTable } = await callAPI(currentContact);
+        const { replies } = await callAPI(currentContact);
         hideTypingIndicator();
-        if (newMemoryTable) {
-            window.memoryTableManager.updateContactMemoryTable(currentContact, newMemoryTable);
-            await saveDataToDB();
-        }
+        
+        // 异步更新记忆表格（不阻塞后续流程）
+        setTimeout(async () => {
+            try {
+                await window.memoryTableManager.updateMemoryTableWithSecondaryModel(currentContact);
+            } catch (error) {
+                console.warn('记忆表格更新失败:', error);
+            }
+        }, 1000);
         if (!replies || replies.length === 0) { showTopNotification('AI没有返回有效回复'); return; }
         for (const response of replies) {
             await new Promise(resolve => setTimeout(resolve, 300 + Math.random() * 800));
