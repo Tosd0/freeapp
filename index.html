@@ -809,6 +809,26 @@
         </div>
     </div>
 
+    <!-- Edit Single Memory Item Modal -->
+    <div class="modal" id="editSingleMemoryModal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <div class="modal-title">编辑记忆项</div>
+                <div class="modal-close" onclick="closeModal('editSingleMemoryModal')">取消</div>
+            </div>
+            <div class="modal-body">
+                <form onsubmit="handleEditSingleMemory(event)">
+                    <div class="form-group">
+                        <label class="form-label">记忆内容</label>
+                        <textarea class="form-input" id="editSingleMemoryContent" placeholder="填写你想让AI记住的内容" rows="4" required></textarea>
+                        <div class="form-hint">编辑单条记忆的内容。</div>
+                    </div>
+                    <button type="submit" class="form-submit">保存修改</button>
+                </form>
+            </div>
+        </div>
+    </div>
+
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <script src="script.js"></script>
     <script src="api/api.js"></script>

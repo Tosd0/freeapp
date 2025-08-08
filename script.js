@@ -4361,16 +4361,20 @@ function editSingleMemoryItem(memoryId, itemIndex, isCharacter, characterId) {
     
     const currentItem = memoryItems[itemIndex];
     
-    // 使用简单的prompt进行编辑
-    const newContent = prompt('编辑记忆内容:', currentItem);
-    if (newContent !== null && newContent.trim()) {
-        // 更新记忆项
-        memoryItems[itemIndex] = newContent.trim();
-        const updatedContent = memoryManager.buildMemoryContent(memoryItems);
-        
-        // 更新记忆
-        updateSingleMemory(memoryId, updatedContent, isCharacter, characterId);
-    }
+    // 设置编辑上下文信息
+    memoryManager.singleMemoryEditContext = {
+        memoryId,
+        itemIndex,
+        isCharacter,
+        characterId,
+        memoryItems
+    };
+    
+    // 使用自定义模态窗口进行编辑
+    const editSingleContentTextarea = document.getElementById('editSingleMemoryContent');
+    editSingleContentTextarea.value = currentItem;
+    
+    showModal('editSingleMemoryModal');
 }
 
 // 删除单个记忆项
@@ -4506,6 +4510,49 @@ async function handleEditMemory(event) {
     } catch (error) {
         console.error('更新记忆失败:', error);
         showToast('记忆更新失败');
+    }
+}
+
+// 处理编辑单个记忆项
+async function handleEditSingleMemory(event) {
+    event.preventDefault();
+    
+    const newContent = document.getElementById('editSingleMemoryContent').value.trim();
+    const context = memoryManager.singleMemoryEditContext;
+    
+    if (!newContent) {
+        showToast('请输入记忆内容');
+        return;
+    }
+    
+    if (!context) {
+        showToast('编辑上下文丢失');
+        return;
+    }
+    
+    try {
+        // 更新记忆项
+        context.memoryItems[context.itemIndex] = newContent;
+        const updatedContent = memoryManager.buildMemoryContent(context.memoryItems);
+        
+        // 更新记忆
+        await updateSingleMemory(context.memoryId, updatedContent, context.isCharacter, context.characterId);
+        
+        showToast('记忆项更新成功');
+        closeModal('editSingleMemoryModal');
+        
+        // 清理上下文
+        memoryManager.singleMemoryEditContext = null;
+        
+        // 刷新显示
+        if (context.isCharacter) {
+            loadCharacterMemories();
+        } else {
+            loadGlobalMemories();
+        }
+    } catch (error) {
+        console.error('更新记忆项失败:', error);
+        showToast('记忆项更新失败');
     }
 }
 
