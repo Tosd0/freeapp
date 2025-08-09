@@ -165,10 +165,16 @@
                     <div id="databaseStatsContent" style="font-size: 13px; color: #666;">
                         <div>正在加载统计信息...</div>
                     </div>
-                    <button type="button" class="refresh-stats-btn" onclick="refreshDatabaseStats()" 
-                            style="margin-top: 10px; padding: 5px 10px; font-size: 12px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer;">
-                        刷新统计
-                    </button>
+                    <div style="display: flex; gap: 8px; margin-top: 10px;">
+                        <button type="button" class="refresh-stats-btn" onclick="refreshDatabaseStats()" 
+                                style="padding: 5px 10px; font-size: 12px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer;">
+                            刷新统计
+                        </button>
+                        <button type="button" class="optimize-db-btn" onclick="optimizeEmojiDatabase()" 
+                                style="padding: 5px 10px; font-size: 12px; background: #28a745; color: white; border: none; border-radius: 4px; cursor: pointer;" title="将Base64表情转换为标签格式，减小数据库体积">
+                            🚀 数据库优化
+                        </button>
+                    </div>
                 </div>
                 
                 <!-- 导入导出操作 -->
@@ -178,13 +184,66 @@
                                 style="flex: 1; background-color: #28a745;">
                             📤 导出数据
                         </button>
+
+                        <button type="button" class="form-submit" id="shareDataBtn" onclick="handleShareData()" style="flex: 1; background-color: #007bff;">
+                            🔗 数据传输
+                        </button>
+
                         <button type="button" class="form-submit" onclick="triggerFileSelect()" 
                                 style="flex: 1; background-color: #dc3545;">
                             📥 导入数据
                         </button>
                     </div>
                     
+                    <!-- 剪贴板操作 -->
+                    <div style="display: flex; gap: 10px; margin-bottom: 10px;">
+                        <button type="button" class="form-submit" onclick="exportToClipboard()" 
+                                style="flex: 1; background-color: #6f42c1;">
+                            📋 显示数据文本
+                        </button>
+                        
+                        <button type="button" class="form-submit" onclick="showManualImportArea()" 
+                                style="flex: 1; background-color: #fd7e14;">
+                            📋 手动输入数据
+                        </button>
+                    </div>
+                    
                     <input type="file" id="importFileInput" accept=".json" style="display: none;" onchange="handleFileSelect(event)">
+                    
+                    <!-- 手动复制区域 -->
+                    <div id="manualCopyArea" style="display: none; margin-top: 15px; padding: 15px; background: #f8f9fa; border: 1px solid #dee2e6; border-radius: 4px;">
+                        <div style="margin-bottom: 10px; font-size: 14px; font-weight: bold; color: #495057;">
+                            数据导出内容：
+                        </div>
+                        <textarea id="manualCopyTextArea" readonly style="width: 100%; height: 200px; font-family: monospace; font-size: 12px; padding: 10px; border: 1px solid #ced4da; border-radius: 4px; resize: vertical; background: white;"></textarea>
+                        <div style="margin-top: 10px; display: flex; gap: 10px;">
+                            <button type="button" class="form-submit" onclick="selectAllManualCopyText()" style="flex: 1; background-color: #6c757d; font-size: 12px; padding: 8px;">
+                                📋 全选文本
+                            </button>
+                            <button type="button" class="form-submit" onclick="hideManualCopyArea()" style="flex: 1; background-color: #dc3545; font-size: 12px; padding: 8px;">
+                                ❌ 关闭
+                            </button>
+                        </div>
+                    </div>
+                    
+                    <!-- 手动导入区域 -->
+                    <div id="manualImportArea" style="display: none; margin-top: 15px; padding: 15px; background: #fff3cd; border: 1px solid #ffeaa7; border-radius: 4px;">
+                        <div style="margin-bottom: 10px; font-size: 14px; font-weight: bold; color: #856404;">
+                            请粘贴要导入的数据：
+                        </div>
+                        <textarea id="manualImportTextArea" placeholder="请在此处粘贴JSON格式的数据库备份数据..." style="width: 100%; height: 200px; font-family: monospace; font-size: 12px; padding: 10px; border: 1px solid #ced4da; border-radius: 4px; resize: vertical; background: white;"></textarea>
+                        <div style="margin-top: 10px; display: flex; gap: 10px;">
+                            <button type="button" class="form-submit" onclick="processManualImport()" style="flex: 1; background-color: #fd7e14; font-size: 12px; padding: 8px;">
+                                ✅ 确认导入
+                            </button>
+                            <button type="button" class="form-submit" onclick="clearManualImportText()" style="flex: 1; background-color: #6c757d; font-size: 12px; padding: 8px;">
+                                🗑️ 清空内容
+                            </button>
+                            <button type="button" class="form-submit" onclick="hideManualImportArea()" style="flex: 1; background-color: #dc3545; font-size: 12px; padding: 8px;">
+                                ❌ 关闭
+                            </button>
+                        </div>
+                    </div>
                     
                     <!-- 导入说明 -->
                     <div class="import-warning" style="margin-top: 10px; padding: 10px; background: #f8d7da; border-radius: 4px; border: 1px solid #f5c6cb;">
@@ -399,11 +458,12 @@
                         <textarea class="form-textarea" id="contactPersonality" required placeholder="描述AI的性格、背景、说话风格等"></textarea>
                     </div>
                     
+                    <!-- 【修改点 2】: 更新联系人设置中的语音ID提示 -->
                     <div class="form-group">
-                        <label class="form-label">ElevenLabs 语音ID（可选）</label>
+                        <label class="form-label">Minimax 语音ID（可选）</label>
                         <input type="text" class="form-input" id="contactVoiceId" placeholder="可选 - 填写后角色会拥有语音能力">
                         <div class="context-info" style="margin-top: 4px;">
-                            在 <a href="https://elevenlabs.io/app/voice-library" target="_blank" rel="noopener noreferrer">此处</a> 创建或克隆声音！
+                            在 <a href="https://www.minimaxi.com/voice-clone" target="_blank" rel="noopener noreferrer">Minimax官网</a> 克隆或创建声音！
                         </div>
                     </div>
                     
@@ -504,11 +564,16 @@
                         </div>
                     </div>
                     
+                    <!-- 【修改点 1】: 替换 ElevenLabs 设置为 Minimax 设置 -->
                     <div class="form-group">
-                        <label class="form-label">ElevenLabs API Key</label>
-                        <input type="password" class="form-input" id="elevenLabsApiKey" placeholder="在此输入你的ElevenLabs API Key">
+                        <label for="minimaxGroupId" class="form-label">Minimax Group ID</label>
+                        <input type="text" id="minimaxGroupId" class="form-input" placeholder="输入你的 Minimax Group ID...">
+                    </div>
+                    <div class="form-group">
+                        <label for="minimaxApiKey" class="form-label">Minimax API Key (for TTS)</label>
+                        <input type="password" id="minimaxApiKey" class="form-input" placeholder="输入你的 Minimax API Key...">
                         <div class="context-info" style="margin-top: 4px;">
-                            在 <a href="https://elevenlabs.io/" target="_blank" rel="noopener noreferrer">ElevenLabs</a> 注册账号后在 <a href="https://elevenlabs.io/app/settings/api-keys" target="_blank" rel="noopener noreferrer">此处</a> 创建Unrestricted Key
+                            用于语音克隆功能。在 <a href="https://www.minimaxi.com/" target="_blank" rel="noopener noreferrer">Minimax官网</a> 获取凭证。
                         </div>
                     </div>
                     
@@ -831,7 +896,7 @@
 
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <script src="script.js"></script>
-    <script src="api/api.js"></script>
+    <script src="js/api.js"></script>
     <script src="utils/promptBuilder.js"></script>
     <script src="utils/memoryTable.js"></script>
     <script src="utils/dataMigrator.js"></script>
