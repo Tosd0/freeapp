@@ -431,6 +431,11 @@ function openDB() {
 
         request.onupgradeneeded = event => {
             const db = event.target.result;
+            const oldVersion = event.oldVersion;
+            const newVersion = event.newVersion;
+            
+            console.log(`数据库升级: 从版本 ${oldVersion} 到版本 ${newVersion}`);
+            
             // 音乐播放器相关的ObjectStore
             if (!db.objectStoreNames.contains('songs')) {
                 db.createObjectStore('songs', { keyPath: 'id', autoIncrement: true });
@@ -444,6 +449,10 @@ function openDB() {
             }
             if (!db.objectStoreNames.contains('emojis')) {
                 db.createObjectStore('emojis', { keyPath: 'id' });
+            }
+            // 版本5新增：表情图片分离存储
+            if (!db.objectStoreNames.contains('emojiImages')) {
+                db.createObjectStore('emojiImages', { keyPath: 'tag' });
             }
             if (!db.objectStoreNames.contains('backgrounds')) {
                 db.createObjectStore('backgrounds', { keyPath: 'id' });
@@ -473,6 +482,13 @@ function openDB() {
             if (!db.objectStoreNames.contains('memoryProcessedIndex')) {
                 db.createObjectStore('memoryProcessedIndex', { keyPath: 'contactId' });
             }
+            
+            // 标记需要进行数据优化（针对版本4、5用户）
+            if (oldVersion <= 5 && newVersion >= 7) {
+                // 设置标记，在数据库连接成功后触发优化
+                window._needsEmojiOptimization = true;
+                console.log('标记需要进行表情数据优化');
+            }
         };
 
         request.onsuccess = event => {
@@ -490,6 +506,15 @@ function openDB() {
                 windowDb: !!window.db,
                 windowReady: window.isIndexedDBReady
             });
+            
+            // 检查是否需要进行表情数据优化
+            if (window._needsEmojiOptimization) {
+                console.log('检测到需要进行表情数据优化，准备执行...');
+                setTimeout(() => {
+                    performEmojiOptimization();
+                }, 1000); // 延迟1秒确保所有数据加载完成
+                window._needsEmojiOptimization = false;
+            }
             
             // 数据库准备好后，初始化记忆管理器数据
             if (window.characterMemoryManager && !window.characterMemoryManager.isInitialized) {
@@ -512,6 +537,146 @@ function openDB() {
             reject('IndexedDB error');
         };
     });
+}
+
+// 表情数据结构优化函数（版本4、5用户升级到7时自动执行）
+async function performEmojiOptimization() {
+    try {
+        console.log('开始执行表情数据结构优化...');
+        
+        if (!isIndexedDBReady) {
+            console.error('数据库未准备就绪，无法执行优化');
+            return;
+        }
+        
+        // 获取当前数据
+        const transaction = db.transaction(['contacts', 'emojis', 'emojiImages'], 'readonly');
+        const contactsStore = transaction.objectStore('contacts');
+        const emojisStore = transaction.objectStore('emojis');
+        const emojiImagesStore = transaction.objectStore('emojiImages');
+        
+        const contacts = await promisifyRequest(contactsStore.getAll()) || [];
+        const emojis = await promisifyRequest(emojisStore.getAll()) || [];
+        const existingEmojiImages = await promisifyRequest(emojiImagesStore.getAll()) || [];
+        
+        if (contacts.length === 0 || emojis.length === 0) {
+            console.log('没有数据需要优化，跳过');
+            return;
+        }
+        
+        let processedCount = 0;
+        const base64UrlPattern = /data:image\/[^;]+;base64,[A-Za-z0-9+\/=]+/g;
+        const newEmojiImages = [];
+        const updatedEmojis = [...emojis];
+        const updatedContacts = [];
+        
+        // 遍历所有联系人的消息
+        for (const contact of contacts) {
+            const updatedContact = { ...contact };
+            let contactUpdated = false;
+            
+            if (contact.messages && Array.isArray(contact.messages)) {
+                updatedContact.messages = [];
+                
+                for (const message of contact.messages) {
+                    const updatedMessage = { ...message };
+                    
+                    if (message.content && typeof message.content === 'string') {
+                        const matches = message.content.match(base64UrlPattern);
+                        if (matches) {
+                            for (const base64Url of matches) {
+                                // 查找对应的表情
+                                const emoji = updatedEmojis.find(e => e.url === base64Url);
+                                if (emoji && emoji.meaning) {
+                                    // 检查是否已存在相同的表情图片
+                                    const existingImage = existingEmojiImages.find(img => img.tag === emoji.meaning) ||
+                                                        newEmojiImages.find(img => img.tag === emoji.meaning);
+                                    
+                                    if (!existingImage) {
+                                        newEmojiImages.push({
+                                            tag: emoji.meaning,
+                                            data: base64Url
+                                        });
+                                    }
+                                    
+                                    // 更新表情数据结构
+                                    if (!emoji.tag) {
+                                        emoji.tag = emoji.meaning;
+                                    }
+                                    if (emoji.url) {
+                                        delete emoji.url;
+                                    }
+                                    
+                                    // 替换消息中的格式
+                                    updatedMessage.content = updatedMessage.content.replace(
+                                        base64Url,
+                                        `[emoji:${emoji.meaning}]`
+                                    );
+                                    
+                                    processedCount++;
+                                    contactUpdated = true;
+                                }
+                            }
+                        }
+                    }
+                    
+                    updatedContact.messages.push(updatedMessage);
+                }
+            }
+            
+            if (contactUpdated) {
+                updatedContacts.push(updatedContact);
+            }
+        }
+        
+        // 保存优化后的数据
+        if (processedCount > 0) {
+            const writeTransaction = db.transaction(['contacts', 'emojis', 'emojiImages'], 'readwrite');
+            
+            // 更新表情图片数据
+            if (newEmojiImages.length > 0) {
+                const emojiImagesStore = writeTransaction.objectStore('emojiImages');
+                for (const emojiImage of newEmojiImages) {
+                    await promisifyRequest(emojiImagesStore.put(emojiImage));
+                }
+            }
+            
+            // 更新表情元数据
+            const emojisStore = writeTransaction.objectStore('emojis');
+            for (const emoji of updatedEmojis) {
+                if (emoji.tag) { // 只更新有tag的表情
+                    await promisifyRequest(emojisStore.put(emoji));
+                }
+            }
+            
+            // 更新联系人消息
+            const contactsStore = writeTransaction.objectStore('contacts');
+            for (const contact of updatedContacts) {
+                await promisifyRequest(contactsStore.put(contact));
+            }
+            
+            console.log(`表情数据结构优化完成！`);
+            console.log(`- 处理了 ${processedCount} 个表情引用`);
+            console.log(`- 创建了 ${newEmojiImages.length} 个新的表情图片记录`);
+            console.log(`- 更新了 ${updatedContacts.length} 个联系人的消息`);
+            
+            // 显示提示
+            if (typeof showToast === 'function') {
+                showToast(`表情数据优化完成！处理了 ${processedCount} 个表情`, 'success');
+            }
+            
+            // 重新加载数据以确保界面同步
+            await loadDataFromDB();
+        } else {
+            console.log('没有需要优化的表情数据');
+        }
+        
+    } catch (error) {
+        console.error('表情数据优化失败:', error);
+        if (typeof showToast === 'function') {
+            showToast('表情数据优化失败: ' + error.message, 'error');
+        }
+    }
 }
 
 async function loadDataFromDB() {
