@@ -402,6 +402,18 @@ async function init() {
                         console.log('升级统计:', upgradeStats);
                     }
                     
+                    // 自动提取消息中的base64图片
+                    console.log('开始自动提取base64图片...');
+                    const extractionStats = await extractBase64ImagesFromMessages();
+                    if (extractionStats.extracted > 0 || extractionStats.replaced > 0) {
+                        console.log(`✅ Base64图片提取完成: 提取了${extractionStats.extracted}个图片, 替换了${extractionStats.replaced}条消息`);
+                        if (typeof showToast === 'function') {
+                            showToast(`自动图片优化完成：处理了${extractionStats.extracted}张图片`);
+                        }
+                    } else if (extractionStats.processed > 0) {
+                        console.log('✅ Base64图片提取检查完成，无需处理的图片');
+                    }
+                    
                     // 在开发模式下运行测试
                     if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
                         console.log('检测到开发环境，运行系统测试...');
@@ -2458,6 +2470,30 @@ async function processTextWithInlineEmojis(textContent) {
         // 处理包含内联表情的文本
         let processedContent = textContent.replace(/\n/g, '<br>');
         
+        // 处理虚拟文件系统图片链接
+        const virtualImageRegex = /virtual:\/\/([^\s<>]+)/g;
+        const virtualMatches = [...processedContent.matchAll(virtualImageRegex)];
+        for (const match of virtualMatches) {
+            const fullMatch = match[0];  // virtual://path
+            const virtualPath = match[0];  // 完整的虚拟路径
+            
+            try {
+                const imageUrl = await resolveVirtualImagePath(virtualPath);
+                if (imageUrl) {
+                    // 替换为img标签，保持合理的样式
+                    const replacement = `<img src="${imageUrl}" style="max-width: 300px; max-height: 300px; border-radius: 8px; margin: 4px 0; display: block;" loading="lazy">`;
+                    processedContent = processedContent.replace(fullMatch, replacement);
+                } else {
+                    // 如果无法解析，显示占位符
+                    const replacement = `<div style="color: #999; font-style: italic; padding: 8px; border: 1px dashed #ccc; border-radius: 4px;">图片加载失败</div>`;
+                    processedContent = processedContent.replace(fullMatch, replacement);
+                }
+            } catch (error) {
+                console.error('处理虚拟图片链接时出错:', error);
+                // 出错时保留原始链接
+            }
+        }
+        
         // 使用异步替换处理内联表情
         const emojiMatches = [...processedContent.matchAll(emojiTagRegex)];
         for (const match of emojiMatches) {
@@ -2762,6 +2798,301 @@ async function migrateImageData() {
         console.error('图片数据迁移失败:', error);
     }
 }
+
+// === 自动Base64图片提取和管理 ===
+/**
+ * 生成图片的简单哈希标识（用于去重）
+ * @param {string} base64Data - base64图片数据
+ * @returns {string} 哈希标识
+ */
+function generateImageHash(base64Data) {
+    // 提取base64数据部分（去掉data:image/...;base64,前缀）
+    const base64Content = base64Data.split(',')[1] || base64Data;
+    
+    // 使用前16个字符作为基本标识
+    const prefix = base64Content.substring(0, 16);
+    
+    // 计算数据长度作为额外标识
+    const length = base64Content.length;
+    
+    // 简单的哈希算法：结合前缀和长度
+    let hash = 0;
+    for (let i = 0; i < prefix.length; i++) {
+        hash = ((hash << 5) - hash + prefix.charCodeAt(i)) & 0xffffffff;
+    }
+    
+    // 返回 prefix_length_hash 格式的标识
+    return `${prefix.substring(0, 8)}_${length}_${Math.abs(hash).toString(36)}`;
+}
+
+/**
+ * 生成消息图片的虚拟文件路径
+ * @param {string} hash - 图片哈希标识  
+ * @param {string} contactId - 联系人ID
+ * @returns {string} 虚拟文件路径
+ */
+function generateMessageImagePath(hash, contactId) {
+    // 扩展imageManager的paths以支持消息图片
+    if (window.imageManager && !window.imageManager.paths.messages) {
+        window.imageManager.paths.messages = '/images/messages/';
+    }
+    
+    const fileName = `msg_${contactId}_${hash}.png`;
+    return `/images/messages/${fileName}`;
+}
+
+/**
+ * 检查图片是否已经存在于文件系统中
+ * @param {string} hash - 图片哈希标识
+ * @returns {Promise<string|null>} 如果存在返回文件路径，否则返回null
+ */
+async function findExistingImage(hash) {
+    if (!window.imageManager) return null;
+    
+    try {
+        // 获取所有消息图片文件
+        const messageFiles = await window.imageManager.listFiles('/images/messages/');
+        
+        // 查找包含相同hash的文件
+        const existingFile = messageFiles.find(file => 
+            file.path.includes(hash) || file.metadata?.hash === hash
+        );
+        
+        return existingFile ? existingFile.path : null;
+    } catch (error) {
+        console.error('查找已存在图片失败:', error);
+        return null;
+    }
+}
+
+/**
+ * 将消息中的base64图片替换为虚拟文件系统链接
+ * @param {string} content - 消息内容
+ * @param {Object} replacements - 替换映射 {base64Data: filePath}
+ * @returns {string} 替换后的消息内容
+ */
+function replaceBase64WithLinks(content, replacements) {
+    let updatedContent = content;
+    
+    for (const [base64Data, filePath] of Object.entries(replacements)) {
+        // 将base64数据替换为虚拟文件系统链接
+        updatedContent = updatedContent.replace(base64Data, `virtual://${filePath}`);
+    }
+    
+    return updatedContent;
+}
+
+/**
+ * 自动提取消息中的base64图片并保存到文件系统
+ * @param {string} contactId - 可选的联系人ID，如果提供则只处理该联系人的消息
+ * @returns {Promise<Object>} 处理结果统计
+ */
+async function extractBase64ImagesFromMessages(contactId = null) {
+    if (!window.imageManager || !isIndexedDBReady) {
+        console.warn('图片管理器未准备好，无法提取图片');
+        return { processed: 0, extracted: 0, replaced: 0, skipped: 0 };
+    }
+
+    try {
+        console.log('开始自动提取消息中的base64图片...');
+        let stats = {
+            processed: 0,    // 处理的消息数
+            extracted: 0,    // 提取的图片数
+            replaced: 0,     // 替换的消息数
+            skipped: 0,      // 跳过的重复图片数
+            errors: 0        // 错误数
+        };
+
+        // 改进的base64图片匹配模式
+        const base64Pattern = /data:image\/[^;,\s]+;base64,[A-Za-z0-9+\/=]+/g;
+        
+        // 获取要处理的联系人列表
+        const contactsToProcess = contactId 
+            ? contacts.filter(contact => contact.id === contactId)
+            : contacts;
+
+        for (const contact of contactsToProcess) {
+            if (!contact.messages || !Array.isArray(contact.messages)) {
+                continue;
+            }
+
+            console.log(`处理联系人 ${contact.name} 的消息...`);
+            let contactModified = false;
+
+            for (let i = 0; i < contact.messages.length; i++) {
+                const message = contact.messages[i];
+                stats.processed++;
+
+                if (!message.content || typeof message.content !== 'string') {
+                    continue;
+                }
+
+                // 查找消息中的所有base64图片
+                const matches = message.content.match(base64Pattern);
+                if (!matches || matches.length === 0) {
+                    continue;
+                }
+
+                console.log(`在消息中发现 ${matches.length} 个base64图片`);
+                const replacements = {};
+
+                for (const base64Data of matches) {
+                    try {
+                        // 生成图片哈希
+                        const hash = generateImageHash(base64Data);
+                        
+                        // 检查是否已经存在相同的图片
+                        let filePath = await findExistingImage(hash);
+                        
+                        if (filePath) {
+                            console.log(`发现重复图片，使用已存在的文件: ${filePath}`);
+                            stats.skipped++;
+                        } else {
+                            // 保存新图片到文件系统
+                            filePath = generateMessageImagePath(hash, contact.id);
+                            const success = await window.imageManager.saveImage(filePath, base64Data, {
+                                type: 'message_image',
+                                hash: hash,
+                                contactId: contact.id,
+                                messageIndex: i,
+                                extracted: new Date().toISOString()
+                            });
+
+                            if (success) {
+                                console.log(`成功保存图片: ${filePath}`);
+                                stats.extracted++;
+                            } else {
+                                console.error(`保存图片失败: ${filePath}`);
+                                stats.errors++;
+                                continue;
+                            }
+                        }
+
+                        // 记录需要替换的内容
+                        replacements[base64Data] = filePath;
+
+                    } catch (error) {
+                        console.error('处理base64图片时出错:', error);
+                        stats.errors++;
+                    }
+                }
+
+                // 如果有内容需要替换
+                if (Object.keys(replacements).length > 0) {
+                    const originalContent = message.content;
+                    message.content = replaceBase64WithLinks(originalContent, replacements);
+                    
+                    if (message.content !== originalContent) {
+                        console.log(`已替换消息中的 ${Object.keys(replacements).length} 个base64图片`);
+                        stats.replaced++;
+                        contactModified = true;
+                    }
+                }
+            }
+
+            // 如果联系人的消息被修改了，标记需要保存
+            if (contactModified) {
+                console.log(`联系人 ${contact.name} 的消息已更新`);
+            }
+        }
+
+        // 保存更新后的数据
+        if (stats.replaced > 0) {
+            await saveDataToDB();
+            console.log('已保存更新后的消息数据');
+        }
+
+        console.log('base64图片提取完成:', stats);
+        return stats;
+
+    } catch (error) {
+        console.error('自动提取base64图片失败:', error);
+        return { processed: 0, extracted: 0, replaced: 0, skipped: 0, errors: 1 };
+    }
+}
+
+/**
+ * 显示虚拟文件系统中的图片（用于消息渲染）
+ * @param {string} virtualPath - 虚拟文件路径 
+ * @returns {Promise<string|null>} 返回可用的图片URL或null
+ */
+async function resolveVirtualImagePath(virtualPath) {
+    if (!window.imageManager) {
+        console.warn('图片管理器不可用');
+        return null;
+    }
+
+    try {
+        // 移除 virtual:// 前缀
+        const cleanPath = virtualPath.replace(/^virtual:\/\//, '');
+        
+        // 通过imageManager获取图片URL
+        const imageUrl = await window.imageManager.getImage(cleanPath);
+        return imageUrl;
+    } catch (error) {
+        console.error('解析虚拟图片路径失败:', error);
+        return null;
+    }
+}
+
+/**
+ * 手动触发base64图片提取（可在控制台调用）
+ * @param {string} contactId - 可选的联系人ID，如果提供则只处理该联系人的消息
+ * @returns {Promise<void>}
+ */
+async function manualExtractBase64Images(contactId = null) {
+    console.log('手动触发base64图片提取...');
+    
+    if (!window.imageManager || !isIndexedDBReady) {
+        console.error('❌ 图片管理器未准备好或数据库未连接');
+        if (typeof showToast === 'function') {
+            showToast('图片管理器未准备好，无法执行提取', 'error');
+        }
+        return;
+    }
+    
+    try {
+        const stats = await extractBase64ImagesFromMessages(contactId);
+        
+        console.log('📊 提取统计:', stats);
+        
+        let message = '';
+        if (stats.extracted > 0) {
+            message = `✅ 成功提取 ${stats.extracted} 张图片，替换 ${stats.replaced} 条消息`;
+            if (stats.skipped > 0) {
+                message += `，跳过 ${stats.skipped} 张重复图片`;
+            }
+        } else if (stats.processed > 0) {
+            message = `✅ 检查了 ${stats.processed} 条消息，未发现需要处理的base64图片`;
+        } else {
+            message = '⚠️ 未找到任何消息需要处理';
+        }
+        
+        if (stats.errors > 0) {
+            message += `，发生 ${stats.errors} 个错误`;
+        }
+        
+        console.log(message);
+        if (typeof showToast === 'function') {
+            showToast(message, stats.errors > 0 ? 'warning' : 'success');
+        }
+        
+        // 如果有替换内容，刷新当前显示的消息
+        if (stats.replaced > 0 && window.renderMessages) {
+            console.log('刷新消息显示...');
+            await renderMessages(false);
+        }
+        
+    } catch (error) {
+        console.error('❌ 手动提取失败:', error);
+        if (typeof showToast === 'function') {
+            showToast('图片提取失败: ' + error.message, 'error');
+        }
+    }
+}
+
+// 将手动提取函数暴露到全局，方便调试
+window.manualExtractBase64Images = manualExtractBase64Images;
 
 // === 图片存储系统管理界面函数 ===
 /**
