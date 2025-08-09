@@ -14,6 +14,7 @@ class IndexedDBManager {
             contacts: { keyPath: 'id' },
             apiSettings: { keyPath: 'id' },
             emojis: { keyPath: 'id' },
+            emojiImages: { keyPath: 'tag' },
             backgrounds: { keyPath: 'id' },
             userProfile: { keyPath: 'id' },
             moments: { keyPath: 'id' },
@@ -21,7 +22,8 @@ class IndexedDBManager {
             hashtagCache: { keyPath: 'id' },
             characterMemories: { keyPath: 'contactId' },
             conversationCounters: { keyPath: 'id' },
-            globalMemory: { keyPath: 'id' }
+            globalMemory: { keyPath: 'id' },
+            memoryProcessedIndex: { keyPath: 'contactId' }
         };
     }
 
@@ -382,13 +384,19 @@ class IndexedDBManager {
     }
     
     /**
-     * 从版本4迁移到版本5
+     * 从版本4迁移到版本7（包含5、6的所有变更）
      * @param {Object} data - 数据对象
      */
     migrateFrom4To5(data) {
-        console.log('执行版本4到5的迁移');
+        console.log('执行版本4到7的迁移');
         
-        // 添加缺失的存储，使用空数组作为默认值
+        // 版本5新增：表情图片分离存储
+        if (!data.emojiImages) {
+            data.emojiImages = [];
+            console.log('添加 emojiImages 存储');
+        }
+        
+        // 版本6新增：记忆系统相关存储
         if (!data.characterMemories) {
             data.characterMemories = [];
             console.log('添加 characterMemories 存储');
@@ -404,9 +412,18 @@ class IndexedDBManager {
             console.log('添加 globalMemory 存储');
         }
         
+        // 版本7新增：记忆处理索引
+        if (!data.memoryProcessedIndex) {
+            data.memoryProcessedIndex = [];
+            console.log('添加 memoryProcessedIndex 存储');
+        }
+        
+        // 表情数据结构优化（版本5的核心功能）
+        this.optimizeEmojiStructure(data);
+        
         // 更新元数据中的存储列表
         if (data._metadata && data._metadata.stores) {
-            const newStores = ['characterMemories', 'conversationCounters', 'globalMemory'];
+            const newStores = ['emojiImages', 'characterMemories', 'conversationCounters', 'globalMemory', 'memoryProcessedIndex'];
             for (const store of newStores) {
                 if (!data._metadata.stores.includes(store)) {
                     data._metadata.stores.push(store);
@@ -431,6 +448,81 @@ class IndexedDBManager {
     migrateFrom6To7(data) {
         console.log('执行版本6到7的迁移');
         // 如果有需要的字段更新，在这里添加
+    }
+
+    /**
+     * 优化表情数据结构（版本5的核心功能）
+     * 将表情从 base64 URL 格式迁移到 tag 格式
+     * @param {Object} data - 数据对象
+     */
+    optimizeEmojiStructure(data) {
+        console.log('开始优化表情数据结构');
+        
+        if (!data.contacts || !Array.isArray(data.contacts)) {
+            console.log('没有联系人数据，跳过表情优化');
+            return;
+        }
+        
+        if (!data.emojis || !Array.isArray(data.emojis)) {
+            console.log('没有表情数据，跳过表情优化');
+            return;
+        }
+        
+        // 确保 emojiImages 存储存在
+        if (!data.emojiImages) {
+            data.emojiImages = [];
+        }
+        
+        let processedCount = 0;
+        const base64UrlPattern = /data:image\/[^;]+;base64,[A-Za-z0-9+\/=]+/g;
+        
+        // 遍历所有联系人的消息
+        for (const contact of data.contacts) {
+            if (!contact.messages || !Array.isArray(contact.messages)) {
+                continue;
+            }
+            
+            for (const message of contact.messages) {
+                if (message.content && typeof message.content === 'string') {
+                    const matches = message.content.match(base64UrlPattern);
+                    if (matches) {
+                        for (const base64Url of matches) {
+                            // 查找对应的表情
+                            const emoji = data.emojis.find(e => e.url === base64Url);
+                            if (emoji && emoji.meaning) {
+                                // 保存图片到 emojiImages 存储
+                                const existingImage = data.emojiImages.find(img => img.tag === emoji.meaning);
+                                if (!existingImage) {
+                                    data.emojiImages.push({
+                                        tag: emoji.meaning,
+                                        data: base64Url
+                                    });
+                                }
+                                
+                                // 更新表情数据结构
+                                if (!emoji.tag) {
+                                    emoji.tag = emoji.meaning;
+                                }
+                                if (emoji.url) {
+                                    delete emoji.url; // 移除旧的url字段
+                                }
+                                
+                                // 替换消息中的格式
+                                message.content = message.content.replace(
+                                    base64Url,
+                                    `[emoji:${emoji.meaning}]`
+                                );
+                                
+                                processedCount++;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        console.log(`表情数据结构优化完成，处理了 ${processedCount} 个表情引用`);
+        console.log(`创建了 ${data.emojiImages.length} 个表情图片记录`);
     }
 
     /**
@@ -756,7 +848,8 @@ window.refreshDatabaseStats = async function() {
                 'contacts': '联系人/群聊',
                 'songs': '音乐文件', 
                 'apiSettings': 'API设置',
-                'emojis': '表情包',
+                'emojis': '表情元数据',
+                'emojiImages': '表情图片',
                 'backgrounds': '聊天背景',
                 'userProfile': '用户资料',
                 'moments': '朋友圈',
