@@ -2470,44 +2470,45 @@ async function processTextWithInlineEmojis(textContent) {
         // 处理包含内联表情的文本
         let processedContent = textContent.replace(/\n/g, '<br>');
         
-        // 处理虚拟文件系统图片链接
-        const virtualImageRegex = /virtual:\/\/([^\s<>]+)/g;
-        const virtualMatches = [...processedContent.matchAll(virtualImageRegex)];
-        for (const match of virtualMatches) {
-            const fullMatch = match[0];  // virtual://path
-            const virtualPath = match[0];  // 完整的虚拟路径
-            
-            try {
-                const imageUrl = await resolveVirtualImagePath(virtualPath);
-                if (imageUrl) {
-                    // 替换为img标签，保持合理的样式
-                    const replacement = `<img src="${imageUrl}" style="max-width: 300px; max-height: 300px; border-radius: 8px; margin: 4px 0; display: block;" loading="lazy">`;
-                    processedContent = processedContent.replace(fullMatch, replacement);
-                } else {
-                    // 如果无法解析，显示占位符
-                    const replacement = `<div style="color: #999; font-style: italic; padding: 8px; border: 1px dashed #ccc; border-radius: 4px;">图片加载失败</div>`;
-                    processedContent = processedContent.replace(fullMatch, replacement);
-                }
-            } catch (error) {
-                console.error('处理虚拟图片链接时出错:', error);
-                // 出错时保留原始链接
-            }
-        }
-        
         // 使用异步替换处理内联表情
         const emojiMatches = [...processedContent.matchAll(emojiTagRegex)];
         for (const match of emojiMatches) {
             const fullMatch = match[0];
             const emojiName = match[1];
-            const foundEmoji = emojis.find(e => e.tag === emojiName || e.meaning === emojiName);
             
+            // 首先尝试通过imageManager查找（支持消息图片）
             let replacement = fullMatch; // 默认保持原样
-            if (foundEmoji && foundEmoji.tag) {
-                const emojiHtml = await renderEmojiContent(`[emoji:${foundEmoji.tag}]`, true);
-                replacement = emojiHtml;
-            } else if (foundEmoji && foundEmoji.url) {
-                // 旧格式兼容
-                replacement = `<img src="${foundEmoji.url}" style="max-width: 100px; max-height: 100px; border-radius: 8px; vertical-align: middle; margin: 2px;">`;
+            
+            try {
+                // 优先使用imageManager获取图片
+                if (window.imageManager) {
+                    const imageUrl = await window.imageManager.getEmoji(emojiName);
+                    if (imageUrl) {
+                        replacement = `<img src="${imageUrl}" style="max-width: 300px; max-height: 300px; border-radius: 8px; vertical-align: middle; margin: 2px; display: inline-block;" loading="lazy">`;
+                    } else {
+                        // 如果imageManager中没有，尝试旧的emojis数组
+                        const foundEmoji = emojis.find(e => e.tag === emojiName || e.meaning === emojiName);
+                        if (foundEmoji && foundEmoji.tag) {
+                            const emojiHtml = await renderEmojiContent(`[emoji:${foundEmoji.tag}]`, true);
+                            replacement = emojiHtml;
+                        } else if (foundEmoji && foundEmoji.url) {
+                            // 旧格式兼容
+                            replacement = `<img src="${foundEmoji.url}" style="max-width: 100px; max-height: 100px; border-radius: 8px; vertical-align: middle; margin: 2px;">`;
+                        }
+                    }
+                } else {
+                    // fallback到旧系统
+                    const foundEmoji = emojis.find(e => e.tag === emojiName || e.meaning === emojiName);
+                    if (foundEmoji && foundEmoji.tag) {
+                        const emojiHtml = await renderEmojiContent(`[emoji:${foundEmoji.tag}]`, true);
+                        replacement = emojiHtml;
+                    } else if (foundEmoji && foundEmoji.url) {
+                        replacement = `<img src="${foundEmoji.url}" style="max-width: 100px; max-height: 100px; border-radius: 8px; vertical-align: middle; margin: 2px;">`;
+                    }
+                }
+            } catch (error) {
+                console.error('处理表情时出错:', error);
+                // 出错时保持原样
             }
             
             processedContent = processedContent.replace(fullMatch, replacement);
@@ -2866,17 +2867,29 @@ async function findExistingImage(hash) {
 }
 
 /**
- * 将消息中的base64图片替换为虚拟文件系统链接
+ * 生成消息图片的唯一标识
+ * @param {string} hash - 图片哈希标识
+ * @param {string} contactId - 联系人ID
+ * @returns {string} 图片意思标识
+ */
+function generateImageMeaning(hash, contactId) {
+    // 生成简洁易读的标识，格式：图片_联系人ID_hash前6位
+    const shortHash = hash.substring(0, 6);
+    return `图片_${contactId}_${shortHash}`;
+}
+
+/**
+ * 将消息中的base64图片替换为[emoji:意思]格式
  * @param {string} content - 消息内容
- * @param {Object} replacements - 替换映射 {base64Data: filePath}
+ * @param {Object} replacements - 替换映射 {base64Data: {filePath, meaning}}
  * @returns {string} 替换后的消息内容
  */
-function replaceBase64WithLinks(content, replacements) {
+function replaceBase64WithEmojiTags(content, replacements) {
     let updatedContent = content;
     
-    for (const [base64Data, filePath] of Object.entries(replacements)) {
-        // 将base64数据替换为虚拟文件系统链接
-        updatedContent = updatedContent.replace(base64Data, `virtual://${filePath}`);
+    for (const [base64Data, {meaning}] of Object.entries(replacements)) {
+        // 将base64数据替换为[emoji:意思]格式
+        updatedContent = updatedContent.replace(base64Data, `[emoji:${meaning}]`);
     }
     
     return updatedContent;
@@ -2941,11 +2954,16 @@ async function extractBase64ImagesFromMessages(contactId = null) {
                         // 生成图片哈希
                         const hash = generateImageHash(base64Data);
                         
-                        // 检查是否已经存在相同的图片
-                        let filePath = await findExistingImage(hash);
+                        // 生成图片意思标识
+                        const meaning = generateImageMeaning(hash, contact.id);
                         
-                        if (filePath) {
-                            console.log(`发现重复图片，使用已存在的文件: ${filePath}`);
+                        // 检查是否已经存在相同的图片（通过哈希）
+                        let existingFilePath = await findExistingImage(hash);
+                        let filePath;
+                        
+                        if (existingFilePath) {
+                            console.log(`发现重复图片，使用已存在的文件: ${existingFilePath}`);
+                            filePath = existingFilePath;
                             stats.skipped++;
                         } else {
                             // 保存新图片到文件系统
@@ -2953,6 +2971,7 @@ async function extractBase64ImagesFromMessages(contactId = null) {
                             const success = await window.imageManager.saveImage(filePath, base64Data, {
                                 type: 'message_image',
                                 hash: hash,
+                                meaning: meaning,
                                 contactId: contact.id,
                                 messageIndex: i,
                                 extracted: new Date().toISOString()
@@ -2968,8 +2987,14 @@ async function extractBase64ImagesFromMessages(contactId = null) {
                             }
                         }
 
+                        // 使用imageManager保存表情记录，确保渲染时能找到
+                        const emojiSaveSuccess = await window.imageManager.saveEmoji(meaning, base64Data);
+                        if (emojiSaveSuccess) {
+                            console.log(`表情记录已保存: ${meaning}`);
+                        }
+
                         // 记录需要替换的内容
-                        replacements[base64Data] = filePath;
+                        replacements[base64Data] = { filePath, meaning };
 
                     } catch (error) {
                         console.error('处理base64图片时出错:', error);
@@ -2980,10 +3005,10 @@ async function extractBase64ImagesFromMessages(contactId = null) {
                 // 如果有内容需要替换
                 if (Object.keys(replacements).length > 0) {
                     const originalContent = message.content;
-                    message.content = replaceBase64WithLinks(originalContent, replacements);
+                    message.content = replaceBase64WithEmojiTags(originalContent, replacements);
                     
                     if (message.content !== originalContent) {
-                        console.log(`已替换消息中的 ${Object.keys(replacements).length} 个base64图片`);
+                        console.log(`已替换消息中的 ${Object.keys(replacements).length} 个base64图片为[emoji:意思]格式`);
                         stats.replaced++;
                         contactModified = true;
                     }
@@ -3011,29 +3036,6 @@ async function extractBase64ImagesFromMessages(contactId = null) {
     }
 }
 
-/**
- * 显示虚拟文件系统中的图片（用于消息渲染）
- * @param {string} virtualPath - 虚拟文件路径 
- * @returns {Promise<string|null>} 返回可用的图片URL或null
- */
-async function resolveVirtualImagePath(virtualPath) {
-    if (!window.imageManager) {
-        console.warn('图片管理器不可用');
-        return null;
-    }
-
-    try {
-        // 移除 virtual:// 前缀
-        const cleanPath = virtualPath.replace(/^virtual:\/\//, '');
-        
-        // 通过imageManager获取图片URL
-        const imageUrl = await window.imageManager.getImage(cleanPath);
-        return imageUrl;
-    } catch (error) {
-        console.error('解析虚拟图片路径失败:', error);
-        return null;
-    }
-}
 
 /**
  * 手动触发base64图片提取（可在控制台调用）
@@ -3078,7 +3080,7 @@ async function manualExtractBase64Images(contactId = null) {
         }
         
         // 如果有替换内容，刷新当前显示的消息
-        if (stats.replaced > 0 && window.renderMessages) {
+        if (stats.replaced > 0 && typeof renderMessages === 'function') {
             console.log('刷新消息显示...');
             await renderMessages(false);
         }
@@ -3093,6 +3095,61 @@ async function manualExtractBase64Images(contactId = null) {
 
 // 将手动提取函数暴露到全局，方便调试
 window.manualExtractBase64Images = manualExtractBase64Images;
+
+/**
+ * 清理错误的virtual://链接，为重新提取做准备
+ * 将virtual://链接从消息中移除，但保留文件系统中的图片
+ */
+async function cleanupVirtualLinks() {
+    console.log('开始清理错误的virtual://链接...');
+    
+    let cleanedCount = 0;
+    const virtualLinkRegex = /virtual:\/\/[^\s<>]+/g;
+    
+    for (const contact of contacts) {
+        if (!contact.messages || !Array.isArray(contact.messages)) {
+            continue;
+        }
+        
+        let contactModified = false;
+        
+        for (const message of contact.messages) {
+            if (!message.content || typeof message.content !== 'string') {
+                continue;
+            }
+            
+            if (virtualLinkRegex.test(message.content)) {
+                // 移除virtual://链接，替换为占位文本
+                const originalContent = message.content;
+                message.content = message.content.replace(virtualLinkRegex, '[图片已转换]');
+                
+                if (message.content !== originalContent) {
+                    console.log('已清理消息中的virtual://链接');
+                    cleanedCount++;
+                    contactModified = true;
+                }
+            }
+        }
+        
+        if (contactModified) {
+            console.log(`联系人 ${contact.name} 的消息已清理`);
+        }
+    }
+    
+    if (cleanedCount > 0) {
+        await saveDataToDB();
+        console.log(`✅ 已清理 ${cleanedCount} 个virtual://链接`);
+        
+        if (typeof showToast === 'function') {
+            showToast(`已清理 ${cleanedCount} 个错误链接，请重新运行图片提取`, 'success');
+        }
+    } else {
+        console.log('✅ 没有发现需要清理的virtual://链接');
+    }
+}
+
+// 暴露清理函数到全局
+window.cleanupVirtualLinks = cleanupVirtualLinks;
 
 // === 图片存储系统管理界面函数 ===
 /**
