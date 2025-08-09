@@ -164,15 +164,15 @@ class PromptBuilder {
             if (msg.type === 'text') {
                 content = this._replaceBase64WithEmoji(msg.content, emojis);
             } 
-            // 处理表情消息
+            // 处理表情消息 - 统一保持为[emoji:xxx]格式
             else if (msg.type === 'emoji') {
                 // 处理新格式 [emoji:tag]
                 if (msg.content.startsWith('[emoji:') && msg.content.endsWith(']')) {
-                    content = msg.content; // 已经是标签格式，直接使用
+                    content = msg.content; // 直接使用[emoji:xxx]格式
                 } else {
-                    // 处理旧格式的URL
+                    // 处理旧格式的URL，转为[emoji:xxx]格式
                     const foundEmoji = emojis.find(e => e.url === msg.content || e.tag === msg.content || e.meaning === msg.content);
-                    content = `[emoji:${foundEmoji?.tag || foundEmoji?.meaning || '未知表情'}]`;
+                    content = `[emoji:${foundEmoji?.meaning || foundEmoji?.tag || '未知表情'}]`;
                 }
             }
             
@@ -205,15 +205,13 @@ class PromptBuilder {
                 } else if (msg.type === 'text') {
                     content = this._replaceBase64WithEmoji(msg.content, emojis);
                 } else if (msg.type === 'emoji') {
-                    // 处理新格式 [emoji:tag]
+                    // 处理新格式 [emoji:tag] - 统一保持为[emoji:xxx]格式用于提示词
                     if (msg.content.startsWith('[emoji:') && msg.content.endsWith(']')) {
-                        const tag = msg.content.slice(7, -1);
-                        const foundEmoji = emojis.find(e => e.tag === tag || e.meaning === tag);
-                        content = `[表情:${foundEmoji?.meaning || foundEmoji?.tag || tag}]`;
+                        content = msg.content; // 直接使用[emoji:xxx]格式
                     } else {
-                        // 处理旧格式的URL
+                        // 处理旧格式的URL，转为[emoji:xxx]格式
                         const foundEmoji = emojis.find(e => e.url === msg.content || e.tag === msg.content || e.meaning === msg.content);
-                        content = `[表情:${foundEmoji?.meaning || foundEmoji?.tag || '未知表情'}]`;
+                        content = `[emoji:${foundEmoji?.meaning || foundEmoji?.tag || '未知表情'}]`;
                     }
                 }
                 
@@ -296,13 +294,13 @@ class PromptBuilder {
             let content = msg.content;
             
             if (msg.type === 'emoji') {
-                // 处理新格式 [emoji:tag]
+                // 处理新格式 [emoji:tag] - 保持[emoji:xxx]格式用于微博提示词
                 if (msg.content.startsWith('[emoji:') && msg.content.endsWith(']')) {
-                    content = msg.content; // 已经是标签格式，直接使用
+                    content = msg.content; // 直接使用[emoji:xxx]格式
                 } else {
-                    // 处理旧格式的URL
+                    // 处理旧格式的URL，转为[emoji:xxx]格式
                     const foundEmoji = emojis.find(e => e.url === msg.content || e.tag === msg.content || e.meaning === msg.content);
-                    content = `[emoji:${foundEmoji?.tag || foundEmoji?.meaning || '未知表情'}]`;
+                    content = `[emoji:${foundEmoji?.meaning || foundEmoji?.tag || '未知表情'}]`;
                 }
             } else if (msg.type === 'text') {
                 content = this._replaceBase64WithEmoji(msg.content, emojis);
@@ -706,7 +704,12 @@ ${userReply}
                     content = '发送了红包';
                 }
             } else if (msg.type === 'emoji') {
-                content = `[表情:${msg.meaning || '未知表情'}]`;
+                // 保持[emoji:xxx]格式用于记忆更新
+                if (msg.content && msg.content.startsWith('[emoji:') && msg.content.endsWith(']')) {
+                    content = msg.content; // 直接使用[emoji:xxx]格式
+                } else {
+                    content = `[emoji:${msg.meaning || '未知表情'}]`;
+                }
             }
             
             return `${senderName}: ${content}`;
@@ -756,11 +759,12 @@ ${chatContext}
         // 处理新格式 [emoji:tag] - 直接返回，不需要替换
         if (raw.includes('[emoji:')) return raw;
         
-        // 处理旧格式的base64
+        // 处理旧格式的base64 - 现在应该很少见了，因为会被自动提取
         const re = /data:image\/[^,\s]+,[A-Za-z0-9+/=]+/g;
         return raw.replace(re, (imgUrl) => {
             const found = emojis.find(e => e.url === imgUrl);
-            return `[发送了表情：${found?.meaning || found?.tag || '未知'}]`;
+            // 修改为标准的[emoji:意思]格式
+            return `[emoji:${found?.meaning || found?.tag || '未知图片'}]`;
         });
     }
 }
