@@ -2843,20 +2843,29 @@ function generateMessageImagePath(hash, contactId) {
 }
 
 /**
- * 检查图片是否已经存在于文件系统中
+ * 检查图片是否已经存在于文件系统中（考虑意思标识）
  * @param {string} hash - 图片哈希标识
+ * @param {string} meaning - 图片意思标识  
  * @returns {Promise<string|null>} 如果存在返回文件路径，否则返回null
  */
-async function findExistingImage(hash) {
+async function findExistingImage(hash, meaning) {
     if (!window.imageManager) return null;
     
     try {
-        // 获取所有消息图片文件
-        const messageFiles = await window.imageManager.listFiles('/images/messages/');
+        // 首先检查是否已经有相同意思的图片（优先复用用户定义的意思）
+        if (meaning) {
+            const existingImageUrl = await window.imageManager.getEmoji(meaning);
+            if (existingImageUrl) {
+                console.log(`发现已存在的用户定义图片: ${meaning}`);
+                // 这里我们返回一个特殊标识，表示可以直接使用这个意思
+                return 'existing-user-meaning';
+            }
+        }
         
-        // 查找包含相同hash的文件
+        // 然后检查是否有相同哈希的图片文件
+        const messageFiles = await window.imageManager.listFiles('/images/messages/');
         const existingFile = messageFiles.find(file => 
-            file.path.includes(hash) || file.metadata?.hash === hash
+            file.metadata?.hash === hash
         );
         
         return existingFile ? existingFile.path : null;
@@ -2867,15 +2876,40 @@ async function findExistingImage(hash) {
 }
 
 /**
- * 生成消息图片的唯一标识
+ * 查找base64图片对应的用户定义的意思
+ * @param {string} base64Data - base64图片数据
+ * @returns {string|null} 用户定义的意思，如果找不到返回null
+ */
+function findUserDefinedMeaning(base64Data) {
+    // 在emojis数组中查找匹配的图片
+    const foundEmoji = emojis.find(emoji => {
+        // 检查是否有相同的base64数据
+        return emoji.url === base64Data;
+    });
+    
+    return foundEmoji ? (foundEmoji.meaning || foundEmoji.tag) : null;
+}
+
+/**
+ * 生成消息图片的标识（优先使用用户定义的意思）
+ * @param {string} base64Data - base64图片数据
  * @param {string} hash - 图片哈希标识
  * @param {string} contactId - 联系人ID
  * @returns {string} 图片意思标识
  */
-function generateImageMeaning(hash, contactId) {
-    // 生成简洁易读的标识，格式：图片_联系人ID_hash前6位
+function generateImageMeaning(base64Data, hash, contactId) {
+    // 首先尝试查找用户定义的意思
+    const userMeaning = findUserDefinedMeaning(base64Data);
+    if (userMeaning) {
+        console.log(`找到用户定义的图片意思: ${userMeaning}`);
+        return userMeaning;
+    }
+    
+    // 如果找不到用户定义的意思，生成技术性标识作为后备
     const shortHash = hash.substring(0, 6);
-    return `图片_${contactId}_${shortHash}`;
+    const fallbackMeaning = `消息图片_${contactId}_${shortHash}`;
+    console.log(`使用后备图片标识: ${fallbackMeaning}`);
+    return fallbackMeaning;
 }
 
 /**
@@ -2954,15 +2988,22 @@ async function extractBase64ImagesFromMessages(contactId = null) {
                         // 生成图片哈希
                         const hash = generateImageHash(base64Data);
                         
-                        // 生成图片意思标识
-                        const meaning = generateImageMeaning(hash, contact.id);
+                        // 生成图片意思标识（优先使用用户定义的意思）
+                        const meaning = generateImageMeaning(base64Data, hash, contact.id);
                         
-                        // 检查是否已经存在相同的图片（通过哈希）
-                        let existingFilePath = await findExistingImage(hash);
+                        // 检查是否已经存在相同的图片（考虑意思标识）
+                        let existingFilePath = await findExistingImage(hash, meaning);
                         let filePath;
                         
-                        if (existingFilePath) {
-                            console.log(`发现重复图片，使用已存在的文件: ${existingFilePath}`);
+                        if (existingFilePath === 'existing-user-meaning') {
+                            // 已经存在用户定义的相同意思，直接使用
+                            console.log(`使用已存在的用户定义图片意思: ${meaning}`);
+                            stats.skipped++;
+                            // 记录需要替换的内容
+                            replacements[base64Data] = { filePath: null, meaning };
+                            continue; // 跳过保存步骤
+                        } else if (existingFilePath) {
+                            console.log(`发现重复图片文件，复用: ${existingFilePath}`);
                             filePath = existingFilePath;
                             stats.skipped++;
                         } else {
@@ -2988,9 +3029,15 @@ async function extractBase64ImagesFromMessages(contactId = null) {
                         }
 
                         // 使用imageManager保存表情记录，确保渲染时能找到
-                        const emojiSaveSuccess = await window.imageManager.saveEmoji(meaning, base64Data);
-                        if (emojiSaveSuccess) {
-                            console.log(`表情记录已保存: ${meaning}`);
+                        // 只有当这是新的意思时才需要保存（避免重复保存用户已定义的表情）
+                        const userMeaning = findUserDefinedMeaning(base64Data);
+                        if (!userMeaning) {
+                            const emojiSaveSuccess = await window.imageManager.saveEmoji(meaning, base64Data);
+                            if (emojiSaveSuccess) {
+                                console.log(`新表情记录已保存: ${meaning}`);
+                            }
+                        } else {
+                            console.log(`使用现有用户定义的表情: ${meaning}`);
                         }
 
                         // 记录需要替换的内容
